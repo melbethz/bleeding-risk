@@ -1,0 +1,9 @@
+streamlit
+matplotlib
+seaborn
+numpy
+pandas
+statsmodels
+pyreadstat
+joblib
+simplenomo
