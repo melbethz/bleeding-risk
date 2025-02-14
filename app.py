@@ -1,61 +1,100 @@
 import streamlit as st
 import numpy as np
 import pandas as pd
-import joblib  # For loading the logistic model
 import matplotlib.pyplot as plt
 import seaborn as sns
+import pyreadstat
+import joblib
+import statsmodels.api as sm
 
-# Load the trained logistic regression model
-model = joblib.load("logistic_model.pkl")
+# ---- Load SPSS Data ----
+file_path = "data.sav"  # Update with your actual path
+df, meta = pyreadstat.read_sav(file_path)
 
-# Streamlit UI
+# ---- Preprocess Data ----
+df_clean = df.rename(columns={
+    "Blutungsevent": "outcome",
+    "HASBLED": "hb",
+    "Alcohol": "c2",
+    "Medikament": "med",
+    "Bridging": "brdg"
+})
+
+df_clean["outcome"] = df_clean["outcome"].astype(int)
+df_clean["c2"] = df_clean["c2"].fillna(0).astype(int)
+
+# Create binary indicators for medications
+df_clean["tai"] = df_clean["med"].apply(lambda x: 1 if x in [1, 3, 4, 6] else 0)
+df_clean["oak"] = df_clean["med"].apply(lambda x: 1 if x in [2, 3, 5, 6] else 0)
+df_clean["brdg"] = df_clean["brdg"].apply(lambda x: 1 if x in [1, 2] else 0)
+
+# Define predictors and outcome
+predictors = ["hb", "c2", "tai", "oak", "brdg"]
+X = df_clean[predictors]
+y = df_clean["outcome"]
+
+# ---- Train Logistic Regression Model ----
+X = sm.add_constant(X)
+model = sm.Logit(y, X).fit()
+
+# ---- Save Model ----
+joblib.dump(model, "logistic_model.pkl")
+
+# ---- Streamlit UI ----
 st.title("Postoperative Bleeding Risk Calculator")
+st.write("Enter the patient details to estimate the risk of postoperative bleeding.")
 
 # Input Fields
-hb = st.number_input("HASBLED Score", min_value=0, max_value=5, value=1)
-c2 = st.selectbox("Alcohol Consumption", ["No", "Yes"])
-tai = st.selectbox("Antiplatelet agents", ["No", "Yes"])
+hb = st.number_input("HASBLED Score (hb)", min_value=0, max_value=5, value=1)
+c2 = st.selectbox("Alcohol Consumption (c2)", ["No", "Yes"])
+tai = st.selectbox("Antiplatelet Agents", ["No", "Yes"])
 oak = st.selectbox("Oral Anticoagulants", ["No", "Yes"])
 brdg = st.selectbox("Perioperative Bridging", ["No", "Yes"])
-age = st.number_input("Age (years)", min_value=18, max_value=100, value=50)
-bmi = st.number_input("BMI", min_value=15.0, max_value=50.0, value=25.0, format="%.1f")
-hem = st.number_input("Preoperative Hemoglobin (g/dL)", min_value=5.0, max_value=18.0, value=13.5, format="%.1f")
-tc = st.number_input("Preoperative Platelet Count (x10^3/uL)", min_value=50, max_value=600, value=250)
-cv = st.number_input("CHA2DS2VASc Score", min_value=0, max_value=9, value=2)
 
-# Convert categorical variables to numerical format
+# Convert categorical variables
 c2 = 1 if c2 == "Yes" else 0
 tai = 1 if tai == "Yes" else 0
 oak = 1 if oak == "Yes" else 0
 brdg = 1 if brdg == "Yes" else 0
 
-# Convert inputs into a NumPy array for prediction
-input_data = np.array([[hb, c2, tai, oak, brdg, age, bmi, hem, tc, cv]])
+# Convert inputs into a NumPy array
+input_data = np.array([[1, hb, c2, tai, oak, brdg]])  # 1 for constant
 
-# Make prediction (handle different model types)
-if hasattr(model, "predict_proba"):  # Scikit-learn
-    risk_probability = model.predict_proba(input_data)[0][1]
-else:  # Statsmodels
-    risk_probability = model.predict(input_data)[0]
+# Make prediction
+risk_probability = model.predict(input_data)[0]
 
 # Display Risk Estimate
 st.markdown(f"### Estimated Risk of Postoperative Bleeding: **{risk_probability * 100:.1f}%**")
 
-# Function to plot Nomogram
-def plot_nomogram(coefficients):
-    predictors = ["HASBLED", "Alcohol", "Antiplatelet", "Oral Anticoagulants", "Bridging", "Age", "BMI", "Hemoglobin", "Platelets", "CHA2DS2VASc"]
-    points = np.abs(coefficients * input_data.flatten())
+# ---- Plot Nomogram ----
+def plot_nomogram(model):
+    coefficients = model.params.drop("const")
+    predictors = coefficients.index
+
+    # Scale coefficients for visualization
+    points = np.abs(coefficients) * 10  # Scale factor
+    max_points = points.max()
+    scaled_points = (points / max_points) * 100
+
+    fig, ax1 = plt.subplots(figsize=(12, 6))
+
+    # Bar plot for each predictor
+    sns.barplot(x=scaled_points, y=predictors, palette="coolwarm", ax=ax1)
     
-    fig, ax = plt.subplots(figsize=(10, 6))
-    sns.barplot(x=points, y=predictors, palette="coolwarm", ax=ax)
-    ax.set_xlabel("Nomogram Points")
-    ax.set_ylabel("Predictors")
-    ax.set_title("Nomogram for Postoperative Bleeding Risk")
+    ax1.set_xlabel("Nomogram Points")
+    ax1.set_ylabel("Predictors")
+    ax1.set_title("Nomogram for Postoperative Bleeding Risk")
+    ax1.grid(axis="x", linestyle="--", alpha=0.7)
+
+    # Overlay probability scale
+    ax2 = ax1.twiny()
+    total_points_range = np.linspace(0, max_points + 10, 100)
+    probabilities = 1 / (1 + np.exp(-(model.params["const"] + coefficients.sum() * total_points_range)))
+    ax2.plot(total_points_range, probabilities, color="brown")
+    ax2.set_xlabel("Total Nomogram Points → Probability of Bleeding")
+    ax2.set_xlim([0, max_points])
     
     st.pyplot(fig)
 
-# Plot Nomogram using model coefficients
-if hasattr(model, "coef_"):  # Scikit-learn
-    plot_nomogram(model.coef_[0])
-elif hasattr(model, "params"):  # Statsmodels
-    plot_nomogram(model.params)
+# Show Nomogram
+plot_nomogram(model)
