@@ -32,8 +32,11 @@ brdg = 1 if brdg == "Yes" else 0
 # Convert inputs into a NumPy array for prediction
 input_data = np.array([[hb, c2, tai, oak, brdg, age, bmi, hem, tc, cv]])
 
-# Make prediction
-risk_probability = model.predict_proba(input_data)[0][1]
+# Make prediction (handle different model types)
+if hasattr(model, "predict_proba"):  # Scikit-learn
+    risk_probability = model.predict_proba(input_data)[0][1]
+else:  # Statsmodels
+    risk_probability = model.predict(input_data)[0]
 
 # Display Risk Estimate
 st.markdown(f"### Estimated Risk of Postoperative Bleeding: **{risk_probability * 100:.1f}%**")
@@ -52,4 +55,7 @@ def plot_nomogram(coefficients):
     st.pyplot(fig)
 
 # Plot Nomogram using model coefficients
-plot_nomogram(model.coef_[0])
+if hasattr(model, "coef_"):  # Scikit-learn
+    plot_nomogram(model.coef_[0])
+elif hasattr(model, "params"):  # Statsmodels
+    plot_nomogram(model.params)
